@@ -1,0 +1,231 @@
+#!/bin/sh
+################################################################
+#Name:		mam
+#Desc:		console menu tool for system maintain
+#Author:	Bird
+#Date:		2018-05-09
+################################################################
+
+#改变工作目录到当前脚本所在路径
+export CUR_DIR=`echo $0 | sed 's/[^\/]*$//'`
+if test "$CUR_DIR" != ""; then
+    cd $CUR_DIR
+fi
+
+#export IFS=
+export CONFIGFILE=${CUR_DIR}/mam.cfg
+if [ "$1" ]; then
+	export CONFIGFILE=$1
+fi
+if [ ! -e "${CONFIGFILE}" ]; then
+	export CONFIGFILE=${CUR_DIR}/mam-help.cfg
+fi
+#read config file lines
+#对文件内容中的空白字符进行编码，以方便后续解析处理控制
+export LINES=`cat $CONFIGFILE | sed -e "s/#/#s-/g" -e "s/\t/#t-/g" -e "s/ /#b-/g" -e "s/\\\\\\\\000/#0-/g" -e "s/\\\\\\\\n/#n-/g" -e "s/\\\\\\/#p-/g" -e "s/\r//g"`
+
+#输出调试信息
+trace() {
+	echo "$1"
+}
+
+#解码空白字符
+decode() {
+	LINE=$1
+	LINE=${LINE//#0-/}
+	LINE=${LINE//#b-/ }
+	LINE=${LINE//#t-/\\t}
+	LINE=${LINE//#n-/\\n}
+	LINE=${LINE//#p-/\\}
+	LINE=${LINE//#s-/#}
+	LINE=${LINE//\\</<}
+	LINE=${LINE//\\>/>}
+	echo "${LINE}"
+}
+
+#打印输出
+prints() {
+	LINE=$1
+	LINE=${LINE//%/%%}
+	LINE=${LINE//-/\\x2D}
+	printf "${LINE}"
+}
+
+maintainmenu() {
+	#parse maintain menu config
+	trace "--------parse maintain menu config--------"
+	local MENU_LEVEL=`expr $1 + 1` #菜单级别
+	local STMP="" #temp string
+	local SOUT="" #caption
+	local MOUT="" #menu choice
+	local ICHS=() #instruct char
+	local IRSP=() #input response
+	local ICNT=-1  #instruct count
+	local ICHR="" #指令符
+	local FLAG="SOUT" #输出类型标记
+	local n=0
+	for LINE in ${LINES}
+	do
+		n=`expr ${n} + 1` #行号
+		#trace "${n}:${LINE}"
+		if [[ "${ICHR}" != "" ]] #指令符不为空
+		then
+			if [[ "${LINE}" =~ ^#t-.* ]] #当前指令响应
+			then
+				LINE=${LINE:3}
+				IRSP[${ICNT}]="${IRSP[${ICNT}]}\\n${LINE}"
+			else #当前指令结束
+				ICHR=""
+			fi
+		fi
+		if [[ "${ICHR}" == "" ]] #当前配置处理
+		then
+			#trace "${n}:${LINE}"
+			if [[ "${LINE:0:2}" == "<<" ]] #行起始标记为输入指令行
+			then #输入指令处理
+				LINE=${LINE:2}
+				STMP=`decode "${LINE}"`
+				STMP=`prints "${STMP}"`
+				ICHR=${STMP:0:1}
+				#trace "'${ICHR}'" "'${STMP}'"
+				if [[ "${ICHR}" != "" ]]
+				then
+					if [[ "${ICHR}" == " " ]]
+					then
+						ICHR="BLANK"
+					fi
+					ICNT=`expr ${ICNT} + 1`
+					ICHS=`prints "${ICHS[*]} ${ICHR}"`
+					MOUT="${MOUT}\n${LINE}" #菜单输出
+				else
+					SOUT="${SOUT}\n${LINE}" #菜单设置格式错误，作为描述输出
+				fi
+			else #输出处理
+				SOUT="${SOUT}\n${LINE}" #描述输出
+			fi
+		fi
+	done
+	INPUT=""
+	while true
+	do
+		trace "--------excute maintain menu config--------"
+		clear
+		#显示输出及命令执行
+		#prints "${SOUT}\n"
+		local OUTS=`prints "${SOUT}"`
+		for LINE in ${OUTS}
+		do
+			if [[ "${LINE:0:2}" == ">>" ]] #命令处理
+			then
+				FLAG="SCMD"
+				LINE=${LINE:2}
+			else
+				FLAG="SOUT"
+			fi
+
+			#输出内容解码
+			LINE=`decode "${LINE}"`
+
+			if [[ "${FLAG}" == "SOUT" ]]
+			then
+				prints "${LINE}\r\n" #显示输出
+			elif [[ "${FLAG}" == "SCMD" ]]
+			then
+				if [[ "${LINE}" == "return" ]]
+				then
+					return 111 #返回上一级
+				elif [[ "${LINE//\s/}" == "" ]]
+				then
+					prints "\n"
+				else
+					#trace "command：${LINE}"
+					eval ${LINE} #执行命令
+					RET=$?
+					#prints "命令 ${LINE} 返回 ${RET}\n"
+					if [[ "${RET}" == "111" ]]
+					then
+						#返回上级菜单
+						prints "command return 111\n"
+						return 0
+					fi
+				fi
+			fi
+		done
+		
+		local MENUS=`prints "${MOUT}"`
+		if [[ "${#MENUS}" == "0" ]] #没有指定下级菜单
+		then
+			prints "按任意键返回\r\n"
+		else
+			prints "\r\n请选择：\r\n"
+			for LINE in ${MENUS}
+			do
+				#输出内容解码
+				LINE=`decode "${LINE}"`
+				LINE=${LINE//%/%%}
+				prints "    ${LINE}\r\n" #显示菜单
+			done
+			if [[ "${MENU_LEVEL}" != "1" ]] #顶级菜单退出需要明确配置
+			then
+				prints "  ESC 返回\r\n"
+			fi
+		fi
+		#prints ">"
+		
+		read -s -n1 INPUT #读取输入
+		INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
+		#trace
+		if [[ "${#MENUS}" == "0" ]]
+		then
+			#按任意键返回
+			return 0
+		elif [[ "${MENU_LEVEL}" != "1" && "${INPUT_CODE}" == "27" ]]
+		then
+			#功能键处理，需要清空键盘缓冲区
+			read -t0.1 -n1 INPUT
+			INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
+			#prints "[${INPUT_CODE}]\r\n"
+			if [[ "${INPUT_CODE}" == "" ]]
+			then
+				prints "ESC\r\n"
+				return 0
+			else
+				#清空键盘缓冲区
+				while [ "${INPUT_CODE}" ]
+				do
+					read -t0.1 -n1 INPUT
+					INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
+					#prints "[${INPUT_CODE}]\r\n"
+				done
+				prints "^[\r\n"
+			fi
+		else
+			prints "input = ${INPUT}[${INPUT_CODE}]\r\n"
+			n=0
+			for ICHR in ${ICHS}
+			do
+				if [[ "${INPUT}" == "${ICHR}" || "${INPUT}" == "" && "${ICHR}" == "BLANK" ]]
+				then
+					#进入下级菜单
+					#prints "\n\n${IRSP[${n}]}\n"
+					LINES=`prints "${IRSP[${n}]}"`
+					maintainmenu ${MENU_LEVEL}
+					RET=$?
+					#prints "子菜单返回 ${RET}\n"
+					if [[ "${RET}" == "111" ]]
+					then
+						#返回上级菜单
+						prints "submenu return 111\n"
+						return 0
+					fi
+					break #终止后续按键匹配
+				fi
+				n=`expr ${n} + 1` #指令序号
+			done
+		fi
+	done
+}
+
+trace "-------------maintain menu--------------"
+maintainmenu 0
+trace "----------end of maintain menu----------"
