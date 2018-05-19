@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 ################################################################
 #Name:		mam
 #Desc:		console menu tool for system maintain
@@ -26,13 +26,13 @@ export LINES=`cat $CONFIGFILE | sed -e "s/#/#s-/g" -e "s/\t/#t-/g" -e "s/ /#b-/g
 
 #输出调试信息
 trace() {
-	echo "$1"
+	if [[ "${MAM_DEBUG}" == "1" ]]; then echo "$1"; fi
 }
 
 #解码空白字符
 decode() {
 	LINE=$1
-	LINE=${LINE//#0-/}
+	LINE=${LINE//#0-/}       # #0- ==> \000 占位空字符
 	LINE=${LINE//#b-/ }
 	LINE=${LINE//#t-/\\t}
 	LINE=${LINE//#n-/\\n}
@@ -51,6 +51,15 @@ prints() {
 	printf "${LINE}"
 }
 
+evalcmd() {
+	SCMD=`prints "$1"`
+	#trace "command：${SCMD}"
+	eval "${SCMD}" #执行命令
+	RET=$?
+	#trace "命令 ${SCMD} 返回 ${RET}"
+	return "${RET}"
+}
+
 maintainmenu() {
 	#parse maintain menu config
 	trace "--------parse maintain menu config--------"
@@ -62,7 +71,6 @@ maintainmenu() {
 	local IRSP=() #input response
 	local ICNT=-1  #instruct count
 	local ICHR="" #指令符
-	local FLAG="SOUT" #输出类型标记
 	local n=0
 	for LINE in ${LINES}
 	do
@@ -93,6 +101,9 @@ maintainmenu() {
 					if [[ "${ICHR}" == " " ]]
 					then
 						ICHR="BLANK"
+					elif [[ "${CASE_SENSITIVE}" != "1" ]]
+					then
+						ICHR=`tr [a-z] [A-Z] <<< "${ICHR}"` 
 					fi
 					ICNT=`expr ${ICNT} + 1`
 					ICHS=`prints "${ICHS[*]} ${ICHR}"`
@@ -111,44 +122,37 @@ maintainmenu() {
 		trace "--------excute maintain menu config--------"
 		clear
 		#显示输出及命令执行
-		#prints "${SOUT}\n"
-		local OUTS=`prints "${SOUT}"`
+		#trace "${SOUT}"
+		local SCMD=""
+		local OUTS=`prints "${SOUT}\n>>"` #最后增加一空行，以确保缓存的SCMD被执行，空行不会输出
 		for LINE in ${OUTS}
 		do
-			if [[ "${LINE:0:2}" == ">>" ]] #命令处理
-			then
-				FLAG="SCMD"
-				LINE=${LINE:2}
-			else
-				FLAG="SOUT"
-			fi
-
 			#输出内容解码
 			LINE=`decode "${LINE}"`
-
-			if [[ "${FLAG}" == "SOUT" ]]
+			if [[ "${LINE:0:2}" == ">>" ]] #命令处理
 			then
-				prints "${LINE}\r\n" #显示输出
-			elif [[ "${FLAG}" == "SCMD" ]]
-			then
-				if [[ "${LINE}" == "return" ]]
+				LINE=${LINE:2}
+				if [[ "${SCMD}" != "" ]]
 				then
-					return 111 #返回上一级
-				elif [[ "${LINE//\s/}" == "" ]]
-				then
-					prints "\n"
-				else
-					#trace "command：${LINE}"
-					eval ${LINE} #执行命令
+					evalcmd "${SCMD}" #执行命令
 					RET=$?
-					#prints "命令 ${LINE} 返回 ${RET}\n"
 					if [[ "${RET}" == "111" ]]
 					then
 						#返回上级菜单
-						prints "command return 111\n"
+						trace "command return 111"
 						return 0
 					fi
+					SCMD=""
 				fi
+				if [[ "${LINE}" != "\\xFF" ]]; then
+					prints "${LINE}\r\n" #显示输出
+				fi
+			elif [[ LINE="${LINE//\s/}" != "" ]]
+			then
+				if [[ "${LINE//\s/}" == "return" ]]; then
+					LINE="return 111"  #返回上一级
+				fi
+				SCMD="${SCMD}${LINE}\n"
 			fi
 		done
 		
@@ -184,38 +188,44 @@ maintainmenu() {
 			#功能键处理，需要清空键盘缓冲区
 			read -t0.1 -n1 INPUT
 			INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
-			#prints "[${INPUT_CODE}]\r\n"
+			#trace "[${INPUT_CODE}]"
 			if [[ "${INPUT_CODE}" == "" ]]
 			then
-				prints "ESC\r\n"
+				trace "ESC"
 				return 0
 			else
 				#清空键盘缓冲区
+				local FK="^["
 				while [ "${INPUT_CODE}" ]
 				do
+					FK="${FK}${INPUT}"
 					read -t0.1 -n1 INPUT
 					INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
-					#prints "[${INPUT_CODE}]\r\n"
+					#trace "[${INPUT_CODE}]"
 				done
-				prints "^[\r\n"
+				trace "${FK}"
 			fi
 		else
-			prints "input = ${INPUT}[${INPUT_CODE}]\r\n"
+			if [[ "${CASE_SENSITIVE}" != "1" ]]
+			then
+				INPUT=`tr [a-z] [A-Z] <<< "${INPUT}"` 
+			fi
+			trace "input = ${INPUT}[${INPUT_CODE}]"
 			n=0
 			for ICHR in ${ICHS}
 			do
 				if [[ "${INPUT}" == "${ICHR}" || "${INPUT}" == "" && "${ICHR}" == "BLANK" ]]
 				then
 					#进入下级菜单
-					#prints "\n\n${IRSP[${n}]}\n"
+					#trace "${IRSP[${n}]}"
 					LINES=`prints "${IRSP[${n}]}"`
 					maintainmenu ${MENU_LEVEL}
 					RET=$?
-					#prints "子菜单返回 ${RET}\n"
+					#trace "子菜单返回 ${RET}"
 					if [[ "${RET}" == "111" ]]
 					then
 						#返回上级菜单
-						prints "submenu return 111\n"
+						trace "submenu return 111"
 						return 0
 					fi
 					break #终止后续按键匹配
@@ -227,5 +237,12 @@ maintainmenu() {
 }
 
 trace "-------------maintain menu--------------"
-maintainmenu 0
-trace "----------end of maintain menu----------"
+if [[ "${SUBMENU}" != "" && "${SUBMENU}" != "0" ]]; then
+	maintainmenu ${SUBMENU}
+	exit 111
+else
+	export SUBMENU=1
+	maintainmenu 0
+	clear
+fi
+#trace "----------end of maintain menu----------"
