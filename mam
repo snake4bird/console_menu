@@ -12,6 +12,13 @@ if test "$CUR_DIR" != ""; then
     cd $CUR_DIR
 fi
 
+if [ ! "${MAM_OPTION}" ]; then
+	export MAM_OPTION="0 维护当前服务器"
+fi
+
+export IP=(`printf "${SSH_CONNECTION}"`)
+export HOSTIP=${IP[2]}
+
 #export IFS=
 export CONFIGFILE=${CUR_DIR}/mam.cfg
 if [ "$1" ]; then
@@ -68,6 +75,7 @@ maintainmenu() {
 	local SOUT="" #caption
 	local MOUT="" #menu choice
 	local ICHS=() #instruct char
+	local IDES=() #instruct description
 	local IRSP=() #input response
 	local ICNT=-1  #instruct count
 	local ICHR="" #指令符
@@ -107,6 +115,7 @@ maintainmenu() {
 					fi
 					ICNT=`expr ${ICNT} + 1`
 					ICHS=`prints "${ICHS[*]} ${ICHR}"`
+					IDES=(`prints "${IDES[*]}\n${LINE}"`)
 					MOUT="${MOUT}\n${LINE}" #菜单输出
 				else
 					SOUT="${SOUT}\n${LINE}" #菜单设置格式错误，作为描述输出
@@ -176,63 +185,70 @@ maintainmenu() {
 		fi
 		#prints ">"
 		
-		read -s -n1 INPUT #读取输入
-		INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
-		#trace
-		if [[ "${#MENUS}" == "0" ]]
-		then
-			#按任意键返回
-			return 0
-		elif [[ "${MENU_LEVEL}" != "1" && "${INPUT_CODE}" == "27" ]]
-		then
-			#功能键处理，需要清空键盘缓冲区
-			read -t0.1 -n1 INPUT
+		local DONE=0
+		while [[ "${DONE}" == "0" ]]
+		do
+			read -s -n1 INPUT #读取输入
 			INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
-			#trace "[${INPUT_CODE}]"
-			if [[ "${INPUT_CODE}" == "" ]]
+			#trace
+			if [[ "${#MENUS}" == "0" ]]
 			then
-				trace "ESC"
+				#按任意键返回
 				return 0
-			else
-				#清空键盘缓冲区
-				local FK="^["
-				while [ "${INPUT_CODE}" ]
-				do
-					FK="${FK}${INPUT}"
-					read -t0.1 -n1 INPUT
-					INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
-					#trace "[${INPUT_CODE}]"
-				done
-				trace "${FK}"
-			fi
-		else
-			if [[ "${CASE_SENSITIVE}" != "1" ]]
+			elif [[ "${MENU_LEVEL}" != "1" && "${INPUT_CODE}" == "27" ]]
 			then
-				INPUT=`tr [a-z] [A-Z] <<< "${INPUT}"` 
-			fi
-			trace "input = ${INPUT}[${INPUT_CODE}]"
-			n=0
-			for ICHR in ${ICHS}
-			do
-				if [[ "${INPUT}" == "${ICHR}" || "${INPUT}" == "" && "${ICHR}" == "BLANK" ]]
+				#功能键处理，需要清空键盘缓冲区
+				read -t0.1 -n1 INPUT
+				INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
+				#trace "[${INPUT_CODE}]"
+				if [[ "${INPUT_CODE}" == "" ]]
 				then
-					#进入下级菜单
-					#trace "${IRSP[${n}]}"
-					LINES=`prints "${IRSP[${n}]}"`
-					maintainmenu ${MENU_LEVEL}
-					RET=$?
-					#trace "子菜单返回 ${RET}"
-					if [[ "${RET}" == "111" ]]
-					then
-						#返回上级菜单
-						trace "submenu return 111"
-						return 0
-					fi
-					break #终止后续按键匹配
+					trace "ESC"
+					return 0
+				else
+					#清空键盘缓冲区
+					local FK="^["
+					while [ "${INPUT_CODE}" ]
+					do
+						FK="${FK}${INPUT}"
+						read -t0.1 -n1 INPUT
+						INPUT_CODE=(`prints "${INPUT}" | od -An -t dC`)
+						#trace "[${INPUT_CODE}]"
+					done
+					trace "${FK}"
 				fi
-				n=`expr ${n} + 1` #指令序号
-			done
-		fi
+			else
+				if [[ "${CASE_SENSITIVE}" != "1" ]]
+				then
+					INPUT=`tr [a-z] [A-Z] <<< "${INPUT}"` 
+				fi
+				trace "input = ${INPUT}[${INPUT_CODE}]"
+				n=0
+				for ICHR in ${ICHS}
+				do
+					if [[ "${INPUT}" == "${ICHR}" || "${INPUT}" == "" && "${ICHR}" == "BLANK" ]]
+					then
+						#进入下级菜单
+						STMP=`decode "${IDES[${n}]}"`
+						export MAM_OPTION=`prints "${STMP}"`
+						#trace "${IRSP[${n}]}"
+						LINES=`prints "${IRSP[${n}]}"`
+						maintainmenu ${MENU_LEVEL}
+						RET=$?
+						#trace "子菜单返回 ${RET}"
+						if [[ "${RET}" == "111" ]]
+						then
+							#返回上级菜单
+							trace "submenu return 111"
+							return 0
+						fi
+						DONE=1
+						break #终止后续按键匹配
+					fi
+					n=`expr ${n} + 1` #指令序号
+				done
+			fi
+		done
 	done
 }
 
